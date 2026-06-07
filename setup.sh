@@ -9,70 +9,106 @@ echo "=================================================="
 echo "🔄 Đang cập nhật Ubuntu..."
 sudo apt update && sudo apt upgrade -y
 
-# 2. Cài đặt CLI Proxy API (phiên bản mới nhất)
+# 2. Cài đặt CLI Proxy API
 echo "📥 Đang cài CLI Proxy API + WebUI Management Center..."
 curl -fsSL https://raw.githubusercontent.com/brokechubb/cliproxyapi-installer/refs/heads/master/cliproxyapi-installer | bash
 
-# 3. Vào thư mục và cấu hình remote management
+# Kiểm tra binary tồn tại
+if [ ! -f "$HOME/cliproxyapi/cli-proxy-api" ]; then
+  echo "❌ Cài đặt thất bại! Binary không tìm thấy tại ~/cliproxyapi/cli-proxy-api"
+  exit 1
+fi
+echo "✅ Binary đã cài xong."
+
+# 3. Vào thư mục và cấu hình
 cd ~/cliproxyapi
 
-echo "🔧 Đang cấu hình remote management + tạo Management Key mạnh..."
-# Tạo secret-key ngẫu nhiên 32 ký tự
+echo "🔧 Đang cấu hình remote management + tạo Management Key..."
+
+# Tạo secret-key ngẫu nhiên
 SECRET_KEY=$(openssl rand -hex 16 | tr '[:lower:]' '[:upper:]')
 
-# Xóa sạch phần remote-management cũ (nếu có) để tránh duplicate
-sed -i '/remote-management:/,/^$/d' config.yaml 2>/dev/null || true
+# Xóa block remote-management cũ nếu có
+sed -i '/^# =.*REMOTE MANAGEMENT/d' config.yaml 2>/dev/null || true
+sed -i '/^remote-management:/,/^[^ ]/{ /^[^ ]/!d; /^remote-management:/d }' config.yaml 2>/dev/null || true
 
-# Thêm phần remote-management chuẩn
+# Thêm block remote-management với key đã expand sẵn
 cat >> config.yaml << EOF
 
 # ====================== REMOTE MANAGEMENT ======================
 remote-management:
-  # Cho phép quản lý từ xa (rất quan trọng)
   allow-remote: true
-  # Management Key (bắt buộc để mở WebUI)
-  secret-key: "$SECRET_KEY"
-  # Không tắt control panel
+  secret-key: "${SECRET_KEY}"
   disable-control-panel: false
 EOF
 
+# Xác nhận config
+echo "📋 Kiểm tra config:"
+grep -A4 "remote-management:" config.yaml
+
 echo "✅ Management Key đã tạo: $SECRET_KEY"
 
-# 4. Mở firewall
+# 4. Tạo systemd user service nếu chưa có
+SERVICE_FILE="$HOME/.config/systemd/user/cliproxyapi.service"
+if [ ! -f "$SERVICE_FILE" ]; then
+  echo "⚙️ Tạo systemd service..."
+  mkdir -p ~/.config/systemd/user
+  cat > "$SERVICE_FILE" << EOF
+[Unit]
+Description=CLI Proxy API Service
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=${HOME}/cliproxyapi
+ExecStart=${HOME}/cliproxyapi/cli-proxy-api
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+EOF
+fi
+
+# 5. Mở firewall
 echo "🔓 Mở port 8317..."
 sudo ufw allow 8317/tcp
 sudo ufw reload
 
-# 5. Khởi động service
+# 6. Khởi động service
 echo "▶️ Khởi động CLI Proxy API service..."
-systemctl --user enable cliproxyapi.service --now
+systemctl --user daemon-reload
+systemctl --user enable cliproxyapi.service
 systemctl --user restart cliproxyapi.service
 
-# 6. Kiểm tra service
+# 7. Kiểm tra service
 sleep 4
 echo "📊 Trạng thái service:"
 systemctl --user status cliproxyapi.service --no-pager | head -n 15
 
-# 7. Lấy IP public
+# Kiểm tra port
+echo "🔌 Kiểm tra port 8317:"
+ss -tlnp | grep 8317 && echo "✅ Port OK" || echo "⚠️ Port chưa mở!"
+
+# 8. Lấy IP public
 IP=$(curl -s ifconfig.me)
 
 echo ""
-echo "🎉 SETUP HOÀN TẤT 100% !"
+echo "🎉 SETUP HOÀN TẤT 100%!"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "📍 Link WebUI Management Center:"
 echo "   http://$IP:8317/management.html"
 echo ""
 echo "🔑 Management Key (copy nguyên dòng):"
-echo "$SECRET_KEY"
+echo "   $SECRET_KEY"
 echo ""
-echo "📌 Hướng dẫn sử dụng:"
+echo "📌 Hướng dẫn:"
 echo "   1. Mở link trên bằng Chrome/Firefox"
-echo "   2. Dán Management Key vào ô và nhấn Connect"
-echo "   3. Vào OAuth để login Gemini / Claude / Grok / Codex..."
+echo "   2. Dán Management Key vào ô và nhấn Login"
+echo "   3. Vào OAuth để login Gemini / Claude / Grok..."
 echo ""
-echo "🔄 Các lệnh quản lý sau này:"
-echo "   systemctl --user status cliproxyapi.service     # xem trạng thái"
-echo "   systemctl --user restart cliproxyapi.service    # restart"
-echo "   journalctl --user -u cliproxyapi.service -f    # xem log"
+echo "🔄 Lệnh quản lý:"
+echo "   systemctl --user status cliproxyapi.service"
+echo "   systemctl --user restart cliproxyapi.service"
+echo "   journalctl --user -u cliproxyapi.service -f"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "✅ Chúc bạn dùng vui vẻ! Nếu cần hỗ trợ thêm thì ping mình nhé 🚀"
