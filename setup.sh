@@ -9,7 +9,7 @@ API_KEY="admin123"
 
 # 1. Cập nhật hệ thống
 echo "🔄 Đang cập nhật Ubuntu..."
-sudo apt update && sudo apt upgrade -y
+apt update && apt upgrade -y
 
 # 2. Cài đặt CLI Proxy API
 echo "📥 Đang cài CLI Proxy API + WebUI Management Center..."
@@ -27,17 +27,15 @@ echo "🔧 Đang cấu hình remote management + API key..."
 # Backup config trước khi sửa
 cp config.yaml config.yaml.bak.$(date +%s)
 
-# === Xóa toàn bộ block api-keys cũ (mọi dòng bắt đầu bằng "  - " ngay sau api-keys:) ===
+# Xóa toàn bộ api-keys cũ, thêm key mới
 awk '
 /^api-keys:/ { print; in_block=1; next }
 in_block && /^  - / { next }
 { in_block=0; print }
 ' config.yaml > config.yaml.tmp && mv config.yaml.tmp config.yaml
-
-# Thêm key mới ngay sau api-keys:
 sed -i "/^api-keys:/a\\  - \"${API_KEY}\"" config.yaml
 
-# === Xóa toàn bộ block remote-management cũ (kể cả comment header) ===
+# Xóa block remote-management cũ, thêm block mới
 awk '
 /^# =+.*REMOTE MANAGEMENT/ { skip=1; next }
 /^remote-management:/ { skip=1; next }
@@ -45,14 +43,13 @@ skip && /^  / { next }
 { skip=0; print }
 ' config.yaml > config.yaml.tmp && mv config.yaml.tmp config.yaml
 
-# Thêm block remote-management mới
-cat >> config.yaml << EOF
+cat >> config.yaml << CFGEOF
 # ====================== REMOTE MANAGEMENT ======================
 remote-management:
   allow-remote: true
   secret-key: "${SECRET_KEY}"
   disable-control-panel: false
-EOF
+CFGEOF
 
 echo "📋 Kiểm tra config:"
 grep -A4 "remote-management:" config.yaml
@@ -61,12 +58,12 @@ grep -A2 "api-keys:" config.yaml
 echo "✅ Management Key: $SECRET_KEY"
 echo "✅ API Key: $API_KEY"
 
-# 4. systemd user service
+# 3. systemd user service (installer đã tạo sẵn, đảm bảo tồn tại)
 SERVICE_FILE="$HOME/.config/systemd/user/cliproxyapi.service"
 if [ ! -f "$SERVICE_FILE" ]; then
   echo "⚙️ Tạo systemd service..."
   mkdir -p ~/.config/systemd/user
-  cat > "$SERVICE_FILE" << EOF
+  cat > "$SERVICE_FILE" << SVCEOF
 [Unit]
 Description=CLI Proxy API Service
 After=network.target
@@ -80,18 +77,26 @@ RestartSec=5
 
 [Install]
 WantedBy=default.target
-EOF
+SVCEOF
 fi
 
-# 5. Firewall
+# 4. Mở firewall (ufw nếu có, fallback iptables)
 echo "🔓 Mở port 8317..."
-sudo ufw allow 8317/tcp
-# Đảm bảo ufw đang active, nếu không thì rule sẽ vô nghĩa
-if ! sudo ufw status | grep -q "Status: active"; then
-  echo "⚠️ UFW đang inactive — bật UFW để rule có hiệu lực"
-  sudo ufw --force enable
+if command -v ufw >/dev/null 2>&1; then
+  ufw allow 8317/tcp
+  if ! ufw status | grep -q "Status: active"; then
+    ufw --force enable
+  fi
+  ufw reload
+else
+  echo "ℹ️ Không có ufw, dùng iptables..."
+  iptables -I INPUT -p tcp --dport 8317 -j ACCEPT
+  DEBIAN_FRONTEND=noninteractive apt install -y iptables-persistent 2>/dev/null || true
+  netfilter-persistent save 2>/dev/null || true
 fi
-sudo ufw reload
+
+# 5. Bật linger để service sống sau khi logout SSH
+loginctl enable-linger root 2>/dev/null || loginctl enable-linger "$(whoami)" 2>/dev/null || true
 
 # 6. Khởi động service
 echo "▶️ Khởi động CLI Proxy API service..."
